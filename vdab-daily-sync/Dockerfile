@@ -26,7 +26,7 @@ ENV PYTHONUNBUFFERED=1
 COPY src/ ./src/
 COPY .env.example ./.env.example
 
-RUN useradd -m -u 1000 sync && chown -R sync:sync /app /opt/venv
+RUN id -u sync >/dev/null 2>&1 || useradd -m -u 1000 sync && chown -R sync /app /opt/venv
 USER sync
 
 HEALTHCHECK --interval=60s --timeout=5s --start-period=10s --retries=3 \
