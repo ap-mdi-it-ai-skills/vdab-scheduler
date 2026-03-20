@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from html import unescape
 from datetime import date, datetime
 from typing import Any
 
@@ -10,6 +12,7 @@ from .repository import VacancyRepository
 from .vdab_client import VdabClient
 
 LOGGER = logging.getLogger(__name__)
+HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 class IngestionService:
@@ -43,6 +46,12 @@ class IngestionService:
         reference = item.get("vacatureReferentie", {})
         internal_id = reference.get("interneReferentie")
         return str(internal_id) if internal_id else None
+
+    def _strip_html_tags(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = HTML_TAG_RE.sub(" ", value)
+        return " ".join(unescape(cleaned).split())
 
     def fetch_filtered_vacancies(self, since_timestamp: datetime | None) -> list[dict[str, Any]]:
         sinds_days = self._compute_sinds_days(since_timestamp)
@@ -93,7 +102,7 @@ class IngestionService:
             vdab_referentie=reference.get("vdabReferentie"),
             titel=functie.get("functieTitel"),
             bedrijf=leverancier.get("naam"),
-            beschrijving=functie.get("omschrijving"),
+            beschrijving=self._strip_html_tags(functie.get("omschrijving")),
             locatie=adres.get("gemeente"),
             postcode=adres.get("postcode"),
             publicatie_datum=vacancy.get("publicatieDatum"),
@@ -101,7 +110,7 @@ class IngestionService:
             ervaring_code=str(ervaring.get("code")) if ervaring.get("code") else None,
             ervaring_label=ervaring.get("label"),
             profiel_vereisten=profiel.get("vereisten", []),
-            vrije_vereiste=vacancy.get("vrijeVereiste"),
+            vrije_vereiste=self._strip_html_tags(vacancy.get("vrijeVereiste")),
             ingested_at=datetime.utcnow(),
         )
 
