@@ -12,7 +12,28 @@ from .repository import VacancyRepository
 from .vdab_client import VdabClient
 
 LOGGER = logging.getLogger(__name__)
-HTML_TAG_RE = re.compile(r"<[^>]+>")
+HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+WHITESPACE_PATTERN = re.compile(r"\s+")
+BULLET_PATTERN = re.compile(r"[\u00B7\u2022\u2023\u2043\u204C\u204D\u2219\u25AA-\u25FF\u2605\u2606]")
+LINE_BULLET_PREFIX_PATTERN = re.compile(r"(?m)^\s*[-*+]\s+")
+EMOJI_PATTERN = re.compile(
+    "["
+    "\u2600-\u26FF"
+    "\u2700-\u27BF"
+    "\uFE0F"
+    "\U0001F300-\U0001F5FF"
+    "\U0001F600-\U0001F64F"
+    "\U0001F680-\U0001F6FF"
+    "\U0001F700-\U0001F77F"
+    "\U0001F780-\U0001F7FF"
+    "\U0001F800-\U0001F8FF"
+    "\U0001F900-\U0001F9FF"
+    "\U0001FA00-\U0001FAFF"
+    "\U0001FB00-\U0001FBFF"
+    "\U0001F1E6-\U0001F1FF"
+    "]",
+    flags=re.UNICODE,
+)
 
 
 class IngestionService:
@@ -50,8 +71,12 @@ class IngestionService:
     def _strip_html_tags(self, value: str | None) -> str | None:
         if value is None:
             return None
-        cleaned = HTML_TAG_RE.sub(" ", value)
-        return " ".join(unescape(cleaned).split())
+        unescaped = unescape(value)
+        without_tags = HTML_TAG_PATTERN.sub(" ", unescaped)
+        without_line_bullets = LINE_BULLET_PREFIX_PATTERN.sub("", without_tags)
+        without_bullets = BULLET_PATTERN.sub(" ", without_line_bullets)
+        without_emojis = EMOJI_PATTERN.sub(" ", without_bullets)
+        return WHITESPACE_PATTERN.sub(" ", without_emojis).strip()
 
     def fetch_filtered_vacancies(self, since_timestamp: datetime | None) -> list[dict[str, Any]]:
         sinds_days = self._compute_sinds_days(since_timestamp)
