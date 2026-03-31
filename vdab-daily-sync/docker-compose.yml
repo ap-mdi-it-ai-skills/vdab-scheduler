@@ -24,3 +24,18 @@ services:
       VDAB_POSTCODES: ${VDAB_POSTCODES:-2000,2018,2020,2030,2040,2050,2060,2100,2130,2140,2150,2170,2180,2600,2610,2660}
       VDAB_EXPERIENCE_CODES: ${VDAB_EXPERIENCE_CODES:-1,2,3}
       VDAB_JOB_DOMAIN: ${VDAB_JOB_DOMAIN:-JOBCAT10}
+  skill-extractor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: skill-extractor
+    restart: unless-stopped
+    command: python -m src.extract_vdab_skills
+    env_file:
+      - .env
+    environment:
+      SUPABASE_DB_URL: ${SUPABASE_DB_URL:-}
+      SUPABASE_DB_KEY: ${SUPABASE_DB_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      MODEL_NAME: ${MODEL_NAME:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
