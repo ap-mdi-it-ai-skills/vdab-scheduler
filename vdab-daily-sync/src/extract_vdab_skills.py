@@ -185,7 +185,7 @@ def link_skill_to_vacancy(vacature_id: int, skill_id: str, bron: str):
 
 def mark_processed(vacature_id: int):
     try:
-        supabase.table("vdab_vacatures_all").update({"skills_processed": True}).eq(
+        supabase.table("vdab_vacatures").update({"skills_processed": True}).eq(
             "id", vacature_id
         ).execute()
     except Exception as exc:
@@ -193,7 +193,7 @@ def mark_processed(vacature_id: int):
 
 
 def fetch_page(offset: int) -> list[dict]:
-    query = supabase.table("vdab_vacatures_all").select(
+    query = supabase.table("vdab_vacatures").select(
         "id, titel, beschrijving, profiel_vereisten, vrije_vereiste, skills_processed"
     )
 
