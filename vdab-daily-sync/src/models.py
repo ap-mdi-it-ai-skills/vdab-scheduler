@@ -21,7 +21,6 @@ class VacancyInsert:
     profiel_vereisten: list[dict[str, Any]]
     vrije_vereiste: str | None
     ingested_at: datetime
-    processed: bool = False
 
 
 @dataclass(frozen=True)

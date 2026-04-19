@@ -73,8 +73,7 @@ class VacancyRepository:
                 ervaring_label,
                 profiel_vereisten,
                 vrije_vereiste,
-                ingested_at,
-                processed
+                ingested_at
             ) VALUES %s
             ON CONFLICT (vdab_id) DO NOTHING
         """
@@ -94,7 +93,6 @@ class VacancyRepository:
                 json.dumps(vacancy.profiel_vereisten),
                 vacancy.vrije_vereiste,
                 vacancy.ingested_at,
-                vacancy.processed,
             )
             for vacancy in vacancies
         ]
