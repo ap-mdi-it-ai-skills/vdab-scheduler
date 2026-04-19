@@ -49,7 +49,7 @@ class VacancyRepository:
         self._ensure_connection()
         with self._conn.cursor() as cursor:
             cursor.execute(
-                "SELECT vdab_id FROM vdab_vacatures WHERE vdab_id = ANY(%s)",
+                "SELECT vdab_id FROM vdab_vacancies_antwerp WHERE vdab_id = ANY(%s)",
                 (ids,),
             )
             return {str(row[0]) for row in cursor.fetchall()}
@@ -59,7 +59,7 @@ class VacancyRepository:
             return 0
         self._ensure_connection()
         query = """
-            INSERT INTO vdab_vacatures (
+            INSERT INTO vdab_vacancies_antwerp (
                 vdab_id,
                 vdab_referentie,
                 titel,
