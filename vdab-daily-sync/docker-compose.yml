@@ -39,18 +39,3 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       MODEL_NAME: ${MODEL_NAME:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-  normalize-vdab-skills:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: normalize-vdab-skills
-    restart: unless-stopped
-    command: python -m src.normalize_vdab_skills
-    env_file:
-      - .env
-    environment:
-      SUPABASE_DB_URL: ${SUPABASE_DB_URL:-}
-      SUPABASE_DB_KEY: ${SUPABASE_DB_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      MODEL_NAME: ${MODEL_NAME:-}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
