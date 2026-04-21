@@ -99,7 +99,8 @@ Include specific proper nouns of:
 CRITICAL RULES:
 1. NO CONCEPTS: Do NOT extract theory, soft skills, diplomas, or descriptive sentences (e.g., skip words like "teamplayer", "analytical", "communication").
 2. NO DUTCH: Skip all Dutch words.
-3. Output EXACTLY a valid JSON array of strings using double quotes.
+3. EXPAND ABBREVIATIONS: If you extract an abbreviation, always write out its full canonical name if you are 100% sure what it means in an IT context. For example: extract "JS" as "JavaScript", "AWS" as "Amazon Web Services", and "K8s" as "Kubernetes".
+4. Output EXACTLY a valid JSON array of strings using double quotes.
 
 Example format:
 ["TechA", "ToolB", "FrameworkC"]
