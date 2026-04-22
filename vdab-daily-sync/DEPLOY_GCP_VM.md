@@ -168,17 +168,3 @@ After reconnecting:
 ```bash
 docker compose -f ~/vdab-scheduler/vdab-daily-sync/docker-compose.yml ps
 ```
-
-## 9. Basic troubleshooting
-
-- Build fails on permissions: run `newgrp docker` or reconnect SSH.
-- Container exits immediately: inspect logs with `docker compose logs -f`.
-- Env var errors: verify `.env` values and spelling.
-- Out-of-memory issues on small VM: reduce extra services and use only required containers.
-
-## 10. Cost control tips
-
-- Use `e2-micro` in a free-tier eligible region.
-- Avoid attaching unnecessary static external IPs.
-- Keep disk size modest.
-- Stop or delete unused VM instances.

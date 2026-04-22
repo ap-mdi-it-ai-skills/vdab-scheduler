@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import psycopg2
 from psycopg2.extras import execute_values
@@ -11,24 +13,98 @@ from .models import VacancyInsert
 
 LOGGER = logging.getLogger(__name__)
 
+RETRYABLE_DB_ERRORS = (psycopg2.OperationalError, psycopg2.InterfaceError)
+
+
+def _normalize_database_url(database_url: str) -> str:
+    parsed = urlparse(database_url)
+    query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    hostname = (parsed.hostname or "").lower()
+    is_local_host = hostname in {"localhost", "127.0.0.1", "::1", "db"}
+
+    # Supabase and most managed Postgres providers require TLS for remote hosts.
+    if not is_local_host and "sslmode" not in query_params:
+        query_params["sslmode"] = "require"
+
+    if query_params:
+        return urlunparse(parsed._replace(query=urlencode(query_params)))
+    return database_url
+
 
 class VacancyRepository:
     def __init__(self, database_url: str) -> None:
-        self._database_url = database_url
+        self._database_url = _normalize_database_url(database_url)
         self._conn: psycopg2.extensions.connection | None = None
         self._connect()
         self._ensure_state_table()
 
     def _connect(self) -> None:
-        self._conn = psycopg2.connect(self._database_url)
-        LOGGER.info("Connected to PostgreSQL")
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                self._conn = psycopg2.connect(
+                    self._database_url,
+                    connect_timeout=10,
+                    application_name="vdab-daily-sync",
+                    keepalives=1,
+                    keepalives_idle=30,
+                    keepalives_interval=10,
+                    keepalives_count=5,
+                )
+                LOGGER.info("Connected to PostgreSQL")
+                return
+            except RETRYABLE_DB_ERRORS as exc:
+                last_error = exc
+                self._conn = None
+                if attempt == 3:
+                    break
+                backoff_seconds = attempt
+                LOGGER.warning(
+                    "PostgreSQL connection failed (attempt %s/3): %s. Retrying in %ss",
+                    attempt,
+                    exc,
+                    backoff_seconds,
+                )
+                time.sleep(backoff_seconds)
+
+        if last_error is not None:
+            raise last_error
 
     def _ensure_connection(self) -> None:
         if self._conn is None or self._conn.closed != 0:
             self._connect()
             return
-        with self._conn.cursor() as cursor:
-            cursor.execute("SELECT 1")
+        try:
+            with self._conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+        except RETRYABLE_DB_ERRORS:
+            self._connect()
+
+    def _run_with_retry(self, operation: callable, *, commit: bool = False):
+        last_error: Exception | None = None
+        for attempt in range(1, 3):
+            self._ensure_connection()
+            try:
+                result = operation()
+                if commit:
+                    self._conn.commit()
+                return result
+            except RETRYABLE_DB_ERRORS as exc:
+                last_error = exc
+                if self._conn is not None and self._conn.closed == 0:
+                    self._conn.rollback()
+                self._connect()
+                if attempt == 2:
+                    break
+                LOGGER.warning(
+                    "Transient PostgreSQL error during operation (attempt %s/2): %s",
+                    attempt,
+                    exc,
+                )
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Unexpected database operation failure")
 
     def _ensure_state_table(self) -> None:
         query = (
@@ -38,26 +114,30 @@ class VacancyRepository:
             "updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()"
             ")"
         )
-        self._ensure_connection()
-        with self._conn.cursor() as cursor:
-            cursor.execute(query)
-        self._conn.commit()
+
+        def operation() -> None:
+            with self._conn.cursor() as cursor:
+                cursor.execute(query)
+
+        self._run_with_retry(operation, commit=True)
 
     def get_existing_ids(self, ids: list[str]) -> set[str]:
         if not ids:
             return set()
-        self._ensure_connection()
-        with self._conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT vdab_id FROM vdab_vacancies_antwerp WHERE vdab_id = ANY(%s)",
-                (ids,),
-            )
-            return {str(row[0]) for row in cursor.fetchall()}
+
+        def operation() -> set[str]:
+            with self._conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT vdab_id FROM vdab_vacancies_antwerp WHERE vdab_id = ANY(%s)",
+                    (ids,),
+                )
+                return {str(row[0]) for row in cursor.fetchall()}
+
+        return self._run_with_retry(operation)
 
     def insert_vacancies(self, vacancies: list[VacancyInsert]) -> int:
         if not vacancies:
             return 0
-        self._ensure_connection()
         query = """
             INSERT INTO vdab_vacancies_antwerp (
                 vdab_id,
@@ -96,23 +176,28 @@ class VacancyRepository:
             )
             for vacancy in vacancies
         ]
-        with self._conn.cursor() as cursor:
-            execute_values(cursor, query, rows)
-            inserted = cursor.rowcount
-        self._conn.commit()
-        return inserted
+
+        def operation() -> int:
+            with self._conn.cursor() as cursor:
+                execute_values(cursor, query, rows)
+                return cursor.rowcount
+
+        return self._run_with_retry(operation, commit=True)
 
     def get_last_run_timestamp(self, key: str = "vdab_daily_last_run") -> datetime | None:
-        self._ensure_connection()
-        with self._conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT state_value FROM ingestion_state WHERE state_key = %s",
-                (key,),
-            )
-            row = cursor.fetchone()
-        if not row:
-            return None
-        return datetime.fromisoformat(str(row[0]))
+
+        def operation() -> datetime | None:
+            with self._conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT state_value FROM ingestion_state WHERE state_key = %s",
+                    (key,),
+                )
+                row = cursor.fetchone()
+            if not row:
+                return None
+            return datetime.fromisoformat(str(row[0]))
+
+        return self._run_with_retry(operation)
 
     def set_last_run_timestamp(
         self,
@@ -125,10 +210,12 @@ class VacancyRepository:
             ON CONFLICT (state_key)
             DO UPDATE SET state_value = EXCLUDED.state_value, updated_at = NOW()
         """
-        self._ensure_connection()
-        with self._conn.cursor() as cursor:
-            cursor.execute(query, (key, timestamp.isoformat()))
-        self._conn.commit()
+
+        def operation() -> None:
+            with self._conn.cursor() as cursor:
+                cursor.execute(query, (key, timestamp.isoformat()))
+
+        self._run_with_retry(operation, commit=True)
 
     def close(self) -> None:
         if self._conn is None:
