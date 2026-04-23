@@ -44,6 +44,28 @@ copy .env.example .env
 python -m src.app
 ```
 
+## Flanders Skills Backfill
+
+Gebruik dit voor de statische tabel `vdab_vacancies_flanders`.
+
+```powershell
+python -m src.extract_vdab_skills_flanders
+```
+
+Vanaf een specifieke vacancy id:
+
+```powershell
+python -m src.extract_vdab_skills_flanders --start-vacancy-id 5000
+```
+
+Dit script:
+
+- leest vacatures uit `vdab_vacancies_flanders`
+- maakt `vdab_vacancies_flanders_skills` aan als clone van `vdab_vacancies_with_skills` (indien nodig)
+- schrijft de geëxtraheerde skills naar `vdab_vacancies_flanders_skills`
+- start standaard vanaf het begin van de tabel als je geen `--start-vacancy-id` meegeeft
+- gebruikt `--start-vacancy-id` of `START_VACANCY_ID` om verderop in de tabel te beginnen
+
 Standaard:
 
 - draait de scheduler dagelijks (`DAILY_SYNC_CRON=0 10 * * *`)
