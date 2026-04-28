@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import httpx
 from openai import OpenAI
 from supabase import create_client, Client
+from difflib import SequenceMatcher
 
 
 load_dotenv()
@@ -24,6 +25,19 @@ MODEL = os.getenv("MODEL_NAME")
 CHUNK_SIZE = 2000  # characters per chunk
 CHUNK_OVERLAP = 500  # overlap tussen chunks om skills op grenzen niet te missen
 LLM_TIMEOUT = 90.0  # seconden timeout per chunk
+
+# Fuzzy matching threshold voor skill normalisatie
+FUZZY_THRESHOLD = 0.85
+
+print("📖 Inladen manual overrides...")
+try:
+    with open("overrides.json", "r", encoding="utf-8") as f:
+        raw_overrides = json.load(f)
+        MANUAL_OVERRIDES = {k.lower(): v for k, v in raw_overrides.items()}
+    print(f"✅ {len(MANUAL_OVERRIDES)} manual overrides geladen")
+except FileNotFoundError:
+    print("⚠️ overrides.json niet gevonden, geen manual overrides geladen")
+    MANUAL_OVERRIDES = {}
 
 
 # Clients
@@ -97,9 +111,9 @@ Include specific proper nouns of:
 - Hardware components & Protocols
 
 CRITICAL RULES:
-1. NO CONCEPTS: Do NOT extract theory, soft skills, diplomas, or descriptive sentences (e.g., skip words like "teamplayer", "analytical", "communication").
+1. NO CONCEPTS: Do NOT extract theory, soft skills, diplomas, or descriptive sentences.
 2. NO DUTCH: Skip all Dutch words.
-3. EXPAND ABBREVIATIONS: If you extract an abbreviation, always write out its full canonical name if you are 100% sure what it means in an IT context. For example: extract "JS" as "JavaScript", "AWS" as "Amazon Web Services", and "K8s" as "Kubernetes".
+3. EXTRACT AS-IS: Output the EXACT term as written (do NOT expand abbreviations).
 4. Output EXACTLY a valid JSON array of strings using double quotes.
 
 Example format:
@@ -241,16 +255,85 @@ def _parse_json_list(raw_text: str) -> list[str]:
         return items
 
 
+def normalize_skill_name(skill: str) -> str:
+    """
+    Normaliseer skill naam via manual overrides.
+
+    Voorkomt bekende varianten zoals "JS" → "JavaScript"
+    """
+    skill_lower = skill.lower().strip()
+
+    if skill_lower in MANUAL_OVERRIDES:
+        canonical = MANUAL_OVERRIDES[skill_lower]
+        if canonical != skill.strip():
+            print(f"   🔄 Normaliseer: '{skill}' → '{canonical}'")
+        return canonical
+
+    return skill.strip()
+
+
+def find_similar_skill(
+    naam: str, type_: str, threshold: float = FUZZY_THRESHOLD
+) -> str | None:
+    """
+    Vind bestaande skill met intelligente fuzzy matching.
+    """
+    existing = (
+        supabase.table("vdab_extracted_skills")
+        .select("id, naam")
+        .eq("type", type_)
+        .execute()
+        .data
+    )
+
+    if not existing:
+        return None
+
+    naam_lower = naam.lower().strip()
+
+    for skill in existing:
+        skill_lower = skill["naam"].lower().strip()
+
+        # CRITICAL: Lengte check voorkomt false positives
+        len_diff = abs(len(naam_lower) - len(skill_lower))
+        if len_diff > 5:  # Max 5 characters verschil toegestaan
+            continue
+
+        # Strategie 1: Substring match (Vue in Vue.js)
+        if len(naam_lower) > 3 and len(skill_lower) > 3:
+            if naam_lower in skill_lower or skill_lower in naam_lower:
+                print(f"   🔗 Substring: '{naam}' → '{skill['naam']}'")
+                return skill["id"]
+
+        # Strategie 2: Fuzzy similarity (PostgreSQL ≈ Postgres)
+        ratio = SequenceMatcher(None, naam_lower, skill_lower).ratio()
+        if ratio >= threshold:
+            print(f"   🔗 Fuzzy ({ratio:.2f}): '{naam}' → '{skill['naam']}'")
+            return skill["id"]
+
+    return None
+
+
 def upsert_skill(naam: str, type_: str, vdab_code: str | None) -> str:
     """
-    Insert of update skill in database.
+    Insert of update skill met 4-staps duplicate prevention.
+
+    BELANGRIJKE FLOW:
+    1. Normaliseer naam via overrides
+    2. Check exact match op genormaliseerde naam
+    3. Check exact match op originele naam
+    4. Check fuzzy match op ORIGINELE naam (niet genormaliseerd!)
+    5. Insert nieuwe skill met genormaliseerde naam
+
+    Waarom fuzzy op origineel?
+    - Voorkomt dat "C (Programming Language)" matcht met "Python (Programming Language)"
+    - De shared suffix "(Programming Language)" zou anders hoge similarity geven
 
     Returns skill ID of None bij fout.
     """
-    # Behoud de originele hoofdletters, haal alleen spaties weg
-    naam = naam.strip()
+    original_naam = naam.strip()  # Bewaar origineel voor fuzzy matching
 
-    payload = {"naam": naam, "type": type_}
+    payload = {"naam": original_naam, "type": type_}
     if vdab_code:
         payload["vdab_code"] = vdab_code
 
@@ -263,18 +346,43 @@ def upsert_skill(naam: str, type_: str, vdab_code: str | None) -> str:
                 .execute()
             )
         else:
-            # Check of skill al bestaat (case-insensitive naam + type)
+            # STAP 1: Normaliseer via overrides
+            normalized_naam = normalize_skill_name(original_naam)
+
+            # STAP 2: Check exact match op genormaliseerde naam
+            # Dit matcht "C" met "C (Programming Language)" als die al bestaat
             existing = (
                 supabase.table("vdab_extracted_skills")
                 .select("id")
-                .ilike("naam", naam)
+                .ilike("naam", normalized_naam)
                 .eq("type", type_)
                 .execute()
             )
             if existing.data:
                 return existing.data[0]["id"]
 
-            # Insert nieuwe skill
+            # STAP 3: Check exact match op origineel (case-insensitive)
+            # Fallback voor skills die nog niet genormaliseerd zijn
+            if normalized_naam.lower() != original_naam.lower():
+                existing = (
+                    supabase.table("vdab_extracted_skills")
+                    .select("id")
+                    .ilike("naam", original_naam)
+                    .eq("type", type_)
+                    .execute()
+                )
+                if existing.data:
+                    return existing.data[0]["id"]
+
+            # STAP 4: Check fuzzy match op ORIGINEEL (niet normalized!)
+            # CRITICAL: Dit voorkomt C# vs Python false matches
+            # Fuzzy werkt op "C#" vs "C", niet op "C# (Programming Language)" vs "C (Programming Language)"
+            similar_id = find_similar_skill(original_naam, type_)
+            if similar_id:
+                return similar_id
+
+            # STAP 5: Insert nieuwe skill met NORMALIZED naam
+            payload["naam"] = normalized_naam
             res = supabase.table("vdab_extracted_skills").insert(payload).execute()
 
         if res.data:
